@@ -415,7 +415,13 @@ class TestLeafOnlyPopulationIsRecorded:
     #:   beside writable siblings, so no enclosing directory mask can hold it and
     #:   leaf-only is the only hold available. The pointer is published by a rename
     #:   INSIDE it, so the directory's own inode stays the same on a republish.
-    EXPECTED: dict[str, int] = {"standard": 300, "cc": 307, "strict": 308}
+    #:
+    #: ``background`` -- the gateway-owned background command records, exit
+    #: statuses and logs, sealed read-only so a forged record cannot aim the
+    #: gateway's kill -- is one more data-home root leaf, three entries per tier.
+    #: The gateway only ever creates names beneath it and never republishes the
+    #: leaf itself.
+    EXPECTED: dict[str, int] = {"standard": 303, "cc": 310, "strict": 311}
 
     @pytest.mark.parametrize("tier", TIERS)
     def test_leaf_only_count_has_not_grown(self, tier: str) -> None:
