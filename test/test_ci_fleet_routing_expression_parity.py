@@ -317,6 +317,11 @@ _CANONICAL_CONSUMER_EXPR = "${{ needs.changes.outputs.linux_runner || 'ubuntu-la
 _CANONICAL_CONSUMER_EXPR_LARGE = (
     "${{ needs.changes.outputs.linux_runner_large || 'ubuntu-latest' }}"
 )
+# The glibc-floor variant. Its empty-output fallback is `ubuntu-22.04`, not
+# `ubuntu-latest`: this consumer's artifact links against the build host's
+# glibc, so a resolver that never reported must not relax the floor the way the
+# other Linux consumers' hosted fallback safely does.
+_CANONICAL_CONSUMER_EXPR_22_04 = "${{ needs.changes.outputs.linux_runner_22_04 || 'ubuntu-22.04' }}"
 _CANONICAL_WINDOWS_CONSUMER_EXPR = "${{ needs.changes.outputs.windows_runner || 'windows-latest' }}"
 _CANONICAL_BOOT_MATRIX_EXPR = (
     "${{ matrix.os == 'ubuntu-latest' && "
@@ -350,6 +355,14 @@ _EXPECTED_RESOLVER_CONSUMER_JOBS = {
     ("ci.yml", "integration"): _CANONICAL_CONSUMER_EXPR_LARGE,
     ("ci.yml", "e2e-boot-matrix"): _CANONICAL_BOOT_MATRIX_EXPR,
     ("ci.yml", "real-adapter-contract"): _CANONICAL_CONSUMER_EXPR,
+    # Default Linux: `pip download` only, so neither tier binds.
+    ("ci.yml", "wheel-closure"): _CANONICAL_CONSUMER_EXPR,
+    # Default Linux: a CPU-bound Rust release build on a small crate.
+    ("ci.yml", "native-redaction-gate"): _CANONICAL_CONSUMER_EXPR,
+    # The one glibc-floor consumer: its packaged artifact links against the
+    # build host's glibc, so it reads the 22.04-pinned output and falls back to
+    # hosted `ubuntu-22.04` rather than to `latest`.
+    ("ci.yml", "linux-packaging"): _CANONICAL_CONSUMER_EXPR_22_04,
 }
 
 
@@ -525,6 +538,19 @@ def test_ci_resolvers_share_actor_policy_and_emit_large_labels() -> None:
         assert 'if [ "$ELIGIBLE" = "true" ]; then' in script
         assert f'echo "{output}=$LABEL instance-size:large"' in script
         if os_name == "linux":
+            # The glibc-floor output rides the same step and the same
+            # eligibility, but its non-fleet value is the floor on BOTH
+            # branches. `kirocrew-linux-4-core` and `ubuntu-latest` each follow
+            # `latest`, so either one appearing here would raise the floor
+            # without reddening anything else; the count pins both branches.
+            assert 'echo "linux_runner_22_04=$LABEL instance-size:large"' in script
+            assert 'echo "linux_runner_22_04=kirocrew-linux-4-core"' not in script
+            assert 'echo "linux_runner_22_04=ubuntu-latest"' not in script
+            assert script.count('echo "linux_runner_22_04=ubuntu-22.04"') == 2
+            assert (
+                changes["outputs"]["linux_runner_22_04"]
+                == "${{ steps.runner.outputs.linux_runner_22_04 }}"
+            )
             # Two non-fleet branches, and BOTH must exist. A run executing in
             # this repository takes the `kirocrew-runners` group's own runner
             # label, keeping this matrix off the enterprise-shared standard

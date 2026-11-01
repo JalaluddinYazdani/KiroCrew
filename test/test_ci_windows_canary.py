@@ -147,6 +147,12 @@ def test_real_resolver_shell_emits_large_and_hosted_fallback(
     }
     if platform == "linux":
         expected["linux_runner_large"] = label + " instance-size:large" if eligible else fallback
+        # The glibc-floor output ignores `in_repo`: both non-fleet destinations
+        # the other two outputs use follow `latest`, so neither can hold a 22.04
+        # floor, and this one takes the hosted 22.04 image on every such path.
+        expected["linux_runner_22_04"] = (
+            label + " instance-size:large" if eligible else "ubuntu-22.04"
+        )
     assert actual == expected
     for key in expected:
         assert jobs["changes"]["outputs"][key] == "${{ steps." + step_id + ".outputs." + key + " }}"
