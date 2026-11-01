@@ -386,7 +386,6 @@
   "src/test/SttSettings.surface.test.tsx",
   "src/test/SttSettings.transcribe.test.tsx",
   "src/test/SubagentCompletionCard.test.tsx",
-  "src/test/SubagentProgressBar.stalledRow.i18n.test.tsx",
   "src/test/SubagentRunCard.test.tsx",
   "src/test/SystemPage.test.tsx",
   "src/test/TaskDetailPanel.test.tsx",
