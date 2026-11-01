@@ -49,6 +49,7 @@ from kiro_crew.dashboard.handlers.work_ledger import (
     _audit,
     _board_header,
     _board_lock,
+    _conductor_unit,
     _drain_before_cancelling,
     _entry_probe_with_baseline,
     _entry_with_baseline,
@@ -459,6 +460,14 @@ async def _ingest_item(
     if mgr is None or crew_state != "connected":
         await _mark_down(board, item.item_id, crew_state, "proxy_peer_not_connected")
         return
+    # The unit the board's copy is filed into, as for a local worker's report: the
+    # conductor's live unit, else its slot's newest one, so a pull with no live
+    # conductor turn (the background puller) still files. Resolved before any peer
+    # call, so a board with nowhere to file costs the crew nothing.
+    unit, unit_error = await _board_unit(state, board)
+    if unit_error is not None:
+        await _mark_error(board, item.item_id, unit_error)
+        return
     try:
         await routes.check_version(mgr, crew)
     except routes.CrewCallError as exc:
@@ -492,7 +501,6 @@ async def _ingest_item(
             "running": bool(row and row["running"]),
             "pending_approval": bool(row and row["pending_approval"]),
         }
-    unit, refusal = _acting_unit(state, board, "work_ledger_read.ingest", item.item_id)
     async with _board_lock(board):
         # Read under the lock, so two pulls never write over each other's record.
         record = await asyncio.to_thread(_stored, board, item.item_id)
@@ -506,14 +514,51 @@ async def _ingest_item(
             record.error = "crew_work_item_not_found"
         elif not 200 <= status < 300 or not isinstance(payload, dict):
             record.error = "crew_peer_refused"
-        elif refusal is not None or unit is None:
-            record.error = _response_code(refusal) if refusal is not None else "crew_log_off"
+        elif _unrecorded_hold(record, payload):
+            # This stamp's filing failed to reach the crew log moments ago: keep the
+            # error and wait out the window rather than audit the same failure again.
+            record.error = "crew_log_unrecorded"
         else:
             record.error = await _ingest_report_locked(
                 state, board, unit, item.item_id, crew, slot, payload
             )
+            failed = record.error == "crew_log_unrecorded"
+            record.unrecorded_stamp = _peer_stamp(payload) if failed else None
+            record.unrecorded_at = _now() if failed else None
         record.ingested_at = record.attempted_at = _now()
         await asyncio.to_thread(_store, board, item.item_id, record)
+
+
+#: Seconds before a pull retries a peer stamp whose filing the crew log refused.
+UNRECORDED_RETRY_SECS = 600.0
+
+
+def _peer_stamp(payload: dict[str, Any]) -> str | None:
+    peer = payload.get("work_item")
+    stamp = peer.get("last_report_at") if isinstance(peer, dict) else None
+    return stamp if isinstance(stamp, str) and stamp else None
+
+
+def _unrecorded_hold(record: work_ledger.RemoteState, payload: dict[str, Any]) -> bool:
+    """Whether this pull skips filing: the same peer stamp failed to record within
+    :data:`UNRECORDED_RETRY_SECS`. A new stamp is always filed."""
+    stamp = _peer_stamp(payload)
+    if not stamp or stamp != record.unrecorded_stamp or not record.unrecorded_at:
+        return False
+    since = _stamp(record.unrecorded_at)
+    if since is None:
+        return False
+    age = (datetime.now(timezone.utc) - since).total_seconds()
+    return 0 <= age < UNRECORDED_RETRY_SECS
+
+
+async def _board_unit(state: "DashboardState", board: str) -> tuple[str, str | None]:
+    """``(unit, None)`` for the unit *board*'s copy of a report is filed into, else
+    ``("", code)``. No audit row: a pull is not a caller's write being refused."""
+    if not crew_log_emit.enabled():
+        return "", "crew_log_off"
+    unit = await asyncio.to_thread(_conductor_unit, state, board)
+    return (unit, None) if unit else ("", "crew_log_unit_unknown")
 
 
 #: A record for an item never pulled.
