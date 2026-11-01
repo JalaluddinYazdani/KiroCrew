@@ -36,6 +36,7 @@ vi.mock('../../store', () => ({
 vi.mock('../../store/chatSlice', () => ({
   createSlot: (arg: unknown) => ({ type: 'createSlot', arg }),
   setPendingInput: (text: string) => ({ type: 'setPendingInput', text }),
+  stagePendingSend: (text: string) => ({ type: 'stagePendingSend', text }),
   // Mirrors the real thunk's `SwitchSlotArg`: a bare key, or an options object whose
   // `keepTargetOnMissing` decides whether a 404 unwinds to the previous slot.
   switchSlot: (arg: string | { key: string; keepTargetOnMissing?: boolean }) =>
@@ -43,6 +44,11 @@ vi.mock('../../store/chatSlice', () => ({
   requestFolderReveal: (folderId: string) => ({ type: 'requestFolderReveal', folderId }),
   requestSlotFolderOpen: (arg: Record<string, unknown>) => ({ type: 'requestSlotFolderOpen', ...arg }),
 }))
+/** Every prompt the bar staged for the composer, seeded or sent. */
+const seededTexts = () => dispatch.mock.calls
+  .map(c => c[0] as { type?: string; text?: string } | undefined)
+  .filter(a => a?.type === 'setPendingInput' || a?.type === 'stagePendingSend')
+  .map(a => a?.text)
 vi.mock('../../components/commandPalette/paletteActions', () => ({
   usePaletteActions: () => ({ navigate, enterInsertOrNewSession, newSessionWithToken }),
 }))
@@ -318,7 +324,7 @@ describe('CommandBarOverlay contributed commands', () => {
       // flake-ok: pre-existing microtask flush inside act(), moved verbatim; tracked for a de-flake pass
       await Promise.resolve()
     })
-    expect(dispatch).not.toHaveBeenCalledWith({ type: 'setPendingInput', text: STANDUP.prompt })
+    expect(seededTexts()).not.toContain(STANDUP.prompt)
     expect(fileSessionInCommandFolder).not.toHaveBeenCalled()
   })
 
@@ -449,7 +455,7 @@ describe('CommandBarOverlay contributed commands', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(dispatch).not.toHaveBeenCalledWith({ type: 'setPendingInput', text: expect.anything() })
+    expect(seededTexts()).toEqual([])
     expect(navigate).not.toHaveBeenCalledWith('/chat?autoSend=1')
   })
 
@@ -478,7 +484,7 @@ describe('CommandBarOverlay contributed commands', () => {
     )
     // The rejection is survivable: the seed still happens, on the slot just created.
     await waitFor(() =>
-      expect(dispatch).toHaveBeenCalledWith({ type: 'setPendingInput', text: expect.stringContaining(LINK) }),
+      expect(dispatch).toHaveBeenCalledWith({ type: 'stagePendingSend', text: expect.stringContaining(LINK) }),
     )
   })
 
@@ -521,7 +527,7 @@ describe('CommandBarOverlay contributed commands', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(dispatch).not.toHaveBeenCalledWith({ type: 'setPendingInput', text: expect.anything() })
+    expect(seededTexts()).toEqual([])
     expect(navigate).not.toHaveBeenCalledWith('/chat?autoSend=1')
   })
 
@@ -851,11 +857,26 @@ describe('CommandBarOverlay contributed commands', () => {
         keepTargetOnMissing: true,
       }),
     )
-    const seeded = dispatch.mock.calls.map(c => c[0]).find(a => a?.type === 'setPendingInput')
-    expect(seeded.text).toBe(`Approve every pull request behind ${LINK}. Skip any I authored.`)
     // `autoSend=1` and NOT `newSession=1`: the session already exists.
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/chat?autoSend=1'))
+    // Staged as a send, so a ChatPage already on screen sends it before the
+    // router commits `?autoSend=1`.
+    const seeded = dispatch.mock.calls.map(c => c[0]).find(a => a?.type === 'stagePendingSend')
+    expect(seeded.text).toBe(`Approve every pull request behind ${LINK}. Skip any I authored.`)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('stages nothing when the page on screen refuses to leave', async () => {
+    dispatch.mockReturnValue({ unwrap: () => Promise.resolve({ key: 'slot-new' }) })
+    navigate.mockReturnValueOnce(false)
+    const onClose = mountWithApps([appWith([APPROVE_ALL])])
+    const input = enterCommand(/Approve all PRs/)
+    fireEvent.change(input, { target: { value: LINK } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/chat?autoSend=1'))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    // A send left staged after "stay" would fire the next time Chat opens.
+    expect(seededTexts()).toEqual([])
   })
 
   it('leaves a non-auto-sending command in the composer', async () => {
@@ -920,7 +941,7 @@ describe('CommandBarOverlay contributed commands', () => {
     release?.({ key: 'slot-new' })
     // flake-ok: pre-existing microtask flush before an absence check, moved verbatim; tracked for a de-flake pass
     await Promise.resolve()
-    expect(dispatch).not.toHaveBeenCalledWith({ type: 'setPendingInput', text: expect.anything() })
+    expect(seededTexts()).toEqual([])
     expect(navigate).not.toHaveBeenCalledWith('/chat?autoSend=1')
   })
 })

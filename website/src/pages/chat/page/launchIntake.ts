@@ -29,12 +29,14 @@ import { uniqueNotificationTs } from './notificationTs'
 
 interface PendingInputIntakeOptions {
   pendingInput: string | null
+  pendingInputSend: boolean
   activeSlot: string | null
   embedded: boolean | undefined
   searchParams: URLSearchParams
   setSearchParams: SetURLSearchParams
   dispatch: AppDispatch
   autoSendRef: MutableRefObject<string | null>
+  autoSendSlotRef: MutableRefObject<{ text: string; slot: string } | null>
   newSessionRef: MutableRefObject<boolean>
   setAutoSendTick: Dispatch<SetStateAction<number>>
   drafts: MutableRefObject<Record<string, string>>
@@ -46,12 +48,14 @@ interface PendingInputIntakeOptions {
 /** The Redux `pendingInput` hand-off and the `?prefill=` fallback URL. */
 export function usePendingInputIntake({
   pendingInput,
+  pendingInputSend,
   activeSlot,
   embedded,
   searchParams,
   setSearchParams,
   dispatch,
   autoSendRef,
+  autoSendSlotRef,
   newSessionRef,
   setAutoSendTick,
   drafts,
@@ -63,12 +67,16 @@ export function usePendingInputIntake({
   useEffect(() => {
     if (pendingInput) {
       dispatch(setPendingInput(null))
-      const shouldAutoSend = embedded ? false : searchParams.get('autoSend') === '1'
+      const shouldAutoSend = embedded ? false : pendingInputSend || searchParams.get('autoSend') === '1'
       const wantNew = embedded ? false : searchParams.get('newSession') === '1'
       if (!embedded && (searchParams.get('prefill') || shouldAutoSend)) setSearchParams({}, { replace: true })
       if (shouldAutoSend) {
         autoSendRef.current = pendingInput
         newSessionRef.current = wantNew
+        // A staged send belongs to the session active when it was staged. The
+        // send waits for `connected`, and the person may open another session
+        // before that; without a target it would go wherever they are then.
+        autoSendSlotRef.current = pendingInputSend && activeSlot && !wantNew ? { text: pendingInput, slot: activeSlot } : null
         // Bump the tick, because arming the ref alone is not enough when ChatPage is
         // ALREADY mounted. The send effect's deps are `[send, connected,
         // autoSendTick]`: on a cold navigation, mounting and connecting move
@@ -90,8 +98,8 @@ export function usePendingInputIntake({
         raisePrefillHint()
       }
     }
-  }, [pendingInput, activeSlot, dispatch, searchParams, setSearchParams, saveDraftsDebounced, embedded, raisePrefillHint, setInput,
-    autoSendRef, newSessionRef, setAutoSendTick, drafts])
+  }, [pendingInput, pendingInputSend, activeSlot, dispatch, searchParams, setSearchParams, saveDraftsDebounced, embedded, raisePrefillHint, setInput,
+    autoSendRef, autoSendSlotRef, newSessionRef, setAutoSendTick, drafts])
 
   // Consume ?prefill= — the no-main-window fallback path for navigation
   // intents forwarded from a popout (see utils/popoutController.ts). The
@@ -481,6 +489,7 @@ interface AutoSendIntakeOptions {
   send: (optionText?: string, targetSlot?: string, steerNow?: boolean, isolated?: boolean) => Promise<boolean>
   autoSendTick: number
   autoSendRef: MutableRefObject<string | null>
+  autoSendSlotRef: MutableRefObject<{ text: string; slot: string } | null>
   appLaunchSendRef: MutableRefObject<{ slotKey?: string } | null>
   /** The exact text a widget action pre-filled, so the send is tagged `widget`. */
   widgetPrefillRef: MutableRefObject<string | null>
@@ -495,6 +504,7 @@ export function useAutoSendIntake({
   autoSendTick,
   autoSendRef,
   appLaunchSendRef,
+  autoSendSlotRef,
   widgetPrefillRef,
   setInput,
   raisePrefillHint,
@@ -504,10 +514,14 @@ export function useAutoSendIntake({
     if (!connected || !autoSendRef.current) return
     const txt = autoSendRef.current
     const appLaunch = appLaunchSendRef.current
+    const staged = autoSendSlotRef.current?.text === txt ? autoSendSlotRef.current.slot : undefined
     autoSendRef.current = null
     appLaunchSendRef.current = null
-    send(txt, appLaunch?.slotKey, undefined, !!appLaunch)
-  }, [send, connected, autoSendTick, autoSendRef, appLaunchSendRef])
+    autoSendSlotRef.current = null
+    // A staged send carries its own text, like an app launch, so it must neither
+    // take nor clear the attachments of the composer on screen.
+    send(txt, appLaunch?.slotKey ?? staged, undefined, !!appLaunch || staged !== undefined)
+  }, [send, connected, autoSendTick, autoSendRef, appLaunchSendRef, autoSendSlotRef])
 
   // Widget interactivity: when a mcwidget iframe fires an action, PRE-FILL the
  // composer instead of auto-submitting. Auto-submitting would be a

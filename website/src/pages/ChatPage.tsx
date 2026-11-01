@@ -185,6 +185,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     messages, slotRunning, slotLoading, sendingRef, knowledgeFetch, pendingQuestion, history,
   })
   const pendingInput = useAppSelector(s => s.chat.pendingInput)
+  const pendingInputSend = useAppSelector(s => s.chat.pendingInputSend)
   const mainComposerAppend = useAppSelector(s => s.chat.mainComposerAppend)
 
   const [chatConfig, setChatConfig] = useState<ChatConfig>(loadChatConfig)
@@ -281,7 +282,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
     activeSlot,
   })
   const {
-    prefillHint, setPrefillHint, prefillEdited, setPrefillEdited, raisePrefillHint, autoSendRef, appLaunchSendRef, autoSendTick, setAutoSendTick, newSessionRef, tokenConsumingRef, widgetPrefillRef,
+    prefillHint, setPrefillHint, prefillEdited, setPrefillEdited, raisePrefillHint, autoSendRef, appLaunchSendRef, autoSendSlotRef, autoSendTick, setAutoSendTick, newSessionRef, tokenConsumingRef, widgetPrefillRef,
     consumedPrefillRef,
   } = useComposerIntakeRefs()
 
@@ -302,12 +303,14 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
   // Text that reaches the composer from outside a keystroke (see launchIntake).
   usePendingInputIntake({
     pendingInput,
+    pendingInputSend,
     activeSlot,
     embedded,
     searchParams,
     setSearchParams,
     dispatch,
     autoSendRef,
+    autoSendSlotRef,
     newSessionRef,
     setAutoSendTick,
     drafts,
@@ -674,7 +677,7 @@ export default function ChatPage({ mode, embedded, embedMode, popout, noUrlSync 
 
   // The armed auto-send (?autoSend=1, a signed token, an app launch) and a
   // widget action's prefill.
-  useAutoSendIntake({ connected, send, autoSendTick, autoSendRef, appLaunchSendRef, widgetPrefillRef, setInput, raisePrefillHint })
+  useAutoSendIntake({ connected, send, autoSendTick, autoSendRef, appLaunchSendRef, autoSendSlotRef, widgetPrefillRef, setInput, raisePrefillHint })
   const {
     approve, dismissApproval, switchAgent, pickModel, setProject,
   } = useSessionChoices({

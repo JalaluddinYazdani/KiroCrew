@@ -115,6 +115,9 @@ export function useComposerIntakeRefs() {
   const raisePrefillHint = useCallback(() => { setPrefillHint(true); setPrefillEdited(false) }, [])
   const autoSendRef = useRef<string | null>(null)
   const appLaunchSendRef = useRef<{ slotKey?: string } | null>(null)
+  // The session an in-window staged send was meant for, kept with its text so a
+  // send armed by any other path never picks it up.
+  const autoSendSlotRef = useRef<{ text: string; slot: string } | null>(null)
   const [autoSendTick, setAutoSendTick] = useState(0)
   const newSessionRef = useRef(false)
   // True while the challenge-redirect token effect is creating/linking its
@@ -146,7 +149,7 @@ export function useComposerIntakeRefs() {
     return () => clearTimeout(t)
   }, [prefillHint, prefillEdited])
   return {
-    prefillHint, setPrefillHint, prefillEdited, setPrefillEdited, raisePrefillHint, autoSendRef, appLaunchSendRef, autoSendTick, setAutoSendTick, newSessionRef, tokenConsumingRef, widgetPrefillRef,
+    prefillHint, setPrefillHint, prefillEdited, setPrefillEdited, raisePrefillHint, autoSendRef, appLaunchSendRef, autoSendSlotRef, autoSendTick, setAutoSendTick, newSessionRef, tokenConsumingRef, widgetPrefillRef,
     consumedPrefillRef,
   }
 }
