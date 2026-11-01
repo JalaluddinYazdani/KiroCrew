@@ -16,9 +16,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 
 import { renderWithProviders } from '../../test/helpers'
+import { refocusWindow } from '../../test/focusBarrier'
 import type { SshAgentConsentStatus } from '../../api/client'
 
-vi.mock('../../api/client', () => ({
+vi.mock('../../api/client', async () => ({
+  // The real class: the card's retry policy tells an owner-gate 403 apart with `instanceof`.
+  ApiError: (await vi.importActual<typeof import('../../api/apiError')>('../../api/apiError')).ApiError,
   api: {
     // The panel's rail reads these on mount regardless of the selected section,
     // and they must RESOLVE: a bare vi.fn() returns undefined, which react-query
@@ -36,6 +39,7 @@ vi.mock('../../api/client', () => ({
 }))
 
 import { api } from '../../api/client'
+import { ApiError } from '../../api/apiError'
 import { SecurityPanel } from './SecurityPanel'
 
 const GRANTED_AT = '2026-10-09T07:00:06+00:00'
@@ -43,6 +47,7 @@ const RISK = /Anything a session runs can push, fetch and sign commits as you/
 const PURPOSE = 'Turn this on if git push, git fetch over SSH, or commit signing fails inside a session.'
 const LOAD_FAILED = 'Could not read whether sessions can use your SSH agent.'
 const SAVE_FAILED = 'Could not save the SSH agent setting.'
+const OWNER_ONLY = 'Only the dashboard owner can see or change whether sessions can use the SSH agent.'
 
 function consent(overrides: Partial<SshAgentConsentStatus> = {}): SshAgentConsentStatus {
   return {
@@ -251,6 +256,31 @@ describe('SecurityPanel - SSH agent forwarding consent', () => {
     expect(screen.queryByText('Not allowed')).not.toBeInTheDocument()
     expect(screen.queryByTestId('ssh-agent-row')).not.toBeInTheDocument()
     expect(screen.queryByTestId('ssh-agent-allow')).not.toBeInTheDocument()
+  })
+
+  it('a non-owner is told only the owner can see it, and the refused read is not repeated on focus', async () => {
+    mocked(api.sshAgentConsent).mockRejectedValue(
+      new ApiError(403, 'dashboard owner required', JSON.stringify({ code: 'dashboard_owner_required' })),
+    )
+    const { queryClient } = renderWithProviders(<SecurityPanel />, { route: '/?section=ssh_agent' })
+
+    expect(await screen.findByTestId('ssh-agent-owner-only')).toHaveTextContent(OWNER_ONLY)
+    expect(screen.queryByText(LOAD_FAILED)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('ssh-agent-row')).not.toBeInTheDocument()
+    expect(api.sshAgentConsent).toHaveBeenCalledTimes(1)
+
+    // The barrier returns once react-query's focus pass has run, so the count
+    // below is read after the pass that would have re-read the route.
+    await refocusWindow(queryClient)
+    expect(api.sshAgentConsent).toHaveBeenCalledTimes(1)
+  })
+
+  it('a re-auth 403 (X-Auth-Required) is not the owner gate: the generic failed read', async () => {
+    mocked(api.sshAgentConsent).mockRejectedValue(new ApiError(403, 'sign in', '', true))
+    renderWithProviders(<SecurityPanel />, { route: '/?section=ssh_agent' })
+
+    expect(await screen.findByText(LOAD_FAILED)).toBeInTheDocument()
+    expect(screen.queryByTestId('ssh-agent-owner-only')).not.toBeInTheDocument()
   })
 
   it('a failed RE-READ after Allow does not keep rendering the stale state', async () => {
