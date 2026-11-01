@@ -308,7 +308,9 @@ async def _webex_config_save(request: web.Request) -> web.Response:
     async with _get_config_lock():
         path = config_path()
         try:
-            data = json.loads(read_config_text(path)) if path.exists() else {}
+            data = (
+                json.loads(read_config_text(path)) if await asyncio.to_thread(path.exists) else {}
+            )
             if not isinstance(data, dict):
                 raise ValueError("config.json is not a JSON object")
         except Exception:
