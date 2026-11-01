@@ -244,11 +244,14 @@ from kiro_crew.dashboard.file_api.project_tree import (  # noqa: F401
     _project_tree_fence,
     _project_tree_file_quotas,
     _project_tree_git_layout,
+    _project_tree_gitignore,
     _project_tree_has_gitmodules,
     _project_tree_identity,
     _project_tree_in_nested_repo,
     _project_tree_is_link,
+    _project_tree_is_real_dir,
     _project_tree_listing,
+    _project_tree_nested_ignores,
     _project_tree_nested_repos,
     _project_tree_pin,
     _project_tree_rebase,
@@ -363,6 +366,13 @@ from kiro_crew.platform.context import (  # noqa: F401
 from kiro_crew.platform.update_governance import (  # noqa: F401 - owner: editor
     git_command_env,
     repo_exec_driver_reason,
+)
+from kiro_crew.project_scan import MAX_DECLARATION_BYTES  # noqa: F401
+from kiro_crew.project_scan import DeclarationError as ProjectScanDeclarationError  # noqa: F401
+from kiro_crew.project_scan import (  # noqa: F401
+    _gitignore_spec,
+    _ignored,
+    _IgnoreLayer,
 )
 from kiro_crew.sandbox import (  # noqa: F401
     cgroup_scope_argv,
@@ -1260,6 +1270,15 @@ _PROJECT_TREE_MAX_ENTRIES = 10_000
 # for the round-robin sampling to share out -- and a folder cut by it is named
 # as truncated, whether or not the row cap was also reached.
 _PROJECT_TREE_SCAN_LIMIT = 20 * _PROJECT_TREE_MAX_ENTRIES
+
+# A nested repository's listing applies its `.gitignore` files. All the files
+# one listing reads share this many bytes (one is read up to project_scan's
+# MAX_DECLARATION_BYTES), and matching shares this many pattern checks (a
+# folder's entries times the patterns in force there; one check is about
+# 0.2 us). Past either budget a file hides nothing, so a tree of large ignore
+# files costs a listing about a second at most rather than minutes.
+_PROJECT_TREE_GITIGNORE_BYTES = 64 * 1024
+_PROJECT_TREE_GITIGNORE_CHECKS = 4_000_000
 
 # Whether this platform lists a directory through a descriptor. Read once: it is
 # a property of the platform, and a test seam that wraps ``os.scandir`` must not

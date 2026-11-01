@@ -17,12 +17,21 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 if TYPE_CHECKING:
+    from pathspec import GitIgnoreSpec
+
     from kiro_crew.dashboard.handlers.files import (
+        _PROJECT_TREE_GITIGNORE_BYTES,
+        _PROJECT_TREE_GITIGNORE_CHECKS,
         _PROJECT_TREE_MAX_ENTRIES,
         _PROJECT_TREE_SCAN_LIMIT,
         _PROJECT_TREE_SCANDIR_TAKES_FD,
         _PROJECT_TREE_SKIP_DIRS,
+        MAX_DECLARATION_BYTES,
         DashboardState,
+        ProjectScanDeclarationError,
+        _gitignore_spec,
+        _ignored,
+        _IgnoreLayer,
         _match_known_project_for,
         _redact_project_path,
         _run_git_bounded,
@@ -308,13 +317,97 @@ def _project_tree_identity(entry: os.DirEntry[str], native: str) -> os.stat_resu
     return os.lstat(native)
 
 
+def _project_tree_gitignore(
+    folder: str, root: str, budget: int
+) -> tuple[GitIgnoreSpec | None, int]:
+    """The parsed ``.gitignore`` of *folder* and the bytes it cost, or ``None``.
+
+    The name must be a regular file by ``lstat`` -- git never follows a linked
+    ``.gitignore``, and neither does this -- and its size (capped at
+    ``MAX_DECLARATION_BYTES`` + 1) must fit the *budget* left for the listing.
+    It is then read by :func:`project_scan._gitignore_spec`: opened without
+    following a link, its descriptor inside *root*, size-capped. A file that is
+    absent, a link, over budget, unreadable, oversized or holds a pattern the
+    grammar refuses gives ``None``, so the listing it would have narrowed stays
+    as it was rather than failing. The cost is charged once the file is read,
+    whatever came of it.
+    """
+    path = os.path.join(folder, ".gitignore")
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None, 0
+    if not _stat_mod.S_ISREG(st.st_mode):
+        return None, 0
+    cost = min(st.st_size, MAX_DECLARATION_BYTES + 1)
+    if cost > budget:
+        return None, 0
+    try:
+        return _gitignore_spec(path, root), cost
+    except (OSError, ProjectScanDeclarationError):
+        return None, cost
+
+
+def _project_tree_is_real_dir(entry: os.DirEntry[str]) -> bool:
+    """Whether *entry* is a directory itself, not a link to one.
+
+    What a ``.gitignore`` match asks: git records a link as a file, so a
+    directory-only pattern (``cache/``) does not match a link named ``cache``.
+    """
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return False
+
+
+def _project_tree_nested_ignores(
+    base: str, segments: tuple[str, ...]
+) -> tuple[tuple[_IgnoreLayer, ...], int]:
+    """The ``.gitignore`` layers in force ABOVE folder *segments* of *base*.
+
+    *segments* name a folder that is, or sits inside, a nested repository
+    (:func:`_project_tree_in_nested_repo`). Git scopes a repository's ignore
+    files to that repository, so the layers start at the innermost one -- the
+    deepest folder along *segments* holding a ``.git`` -- and run down to the
+    listed folder's parent; the walk adds the listed folder's own file and
+    every one beneath it. The project's own ``.gitignore`` files are not
+    among them: git does not apply them inside a nested repository either.
+
+    Returns the layers and the ``_PROJECT_TREE_GITIGNORE_BYTES`` budget they
+    leave for the walk: one budget covers every file one listing reads.
+    """
+    top = max(
+        (
+            depth
+            for depth in range(1, len(segments) + 1)
+            if os.path.lexists(os.path.join(base, *segments[:depth], ".git"))
+        ),
+        # A `.git` gone since the listing checked for it: no layer above.
+        default=len(segments),
+    )
+    layers: list[_IgnoreLayer] = []
+    budget = _PROJECT_TREE_GITIGNORE_BYTES
+    for depth in range(top, len(segments)):
+        folder = os.path.join(base, *segments[:depth])
+        spec, cost = _project_tree_gitignore(folder, base, budget)
+        budget -= cost
+        if spec is not None:
+            layers.append(_IgnoreLayer(base=folder, spec=spec))
+    return tuple(layers), budget
+
+
 def _project_tree_walk(base: str, cap: int, scan_limit: int) -> dict:
     """The non-git listing of *base*: :func:`_project_tree_walk_pinned` from an unpinned root."""
     return _project_tree_walk_pinned(base, cap, scan_limit, None)
 
 
 def _project_tree_walk_pinned(
-    base: str, cap: int, scan_limit: int, root_identity: tuple[int, int] | None
+    base: str,
+    cap: int,
+    scan_limit: int,
+    root_identity: tuple[int, int] | None,
+    ignores: tuple[_IgnoreLayer, ...] | None = None,
+    ignore_bytes: int = 0,
 ) -> dict:
     """The non-git listing of *base*: one bounded breadth-first pass.
 
@@ -353,6 +446,24 @@ def _project_tree_walk_pinned(
     *base* is the native path, and each folder carries its own native path
     alongside its project-relative row: an extended-length ``\\\\?\\`` root on
     Windows does not convert a ``/`` inside a joined path.
+
+    *ignores*, when given, turns on ``.gitignore`` handling for a nested
+    repository's listing: it is the layers in force above *base*
+    (:func:`_project_tree_nested_ignores`). Each folder read adds its own
+    ``.gitignore`` (:func:`_project_tree_gitignore`) to the layers its parent
+    passed down, and starts over from none when it holds a ``.git`` (a
+    repository of its own, which git scopes on its own). An entry those
+    layers ignore is dropped like a fenced one; whether an entry is a directory
+    is read without following a link, since git matches a link as a file.
+    ``None`` (every other listing) reads no ``.gitignore`` at all.
+
+    The ignore work is bounded twice, and past either bound a ``.gitignore``
+    hides nothing, so the listing grows back toward the plain walk rather than
+    costing more: the files read share *ignore_bytes* (what the layers above
+    left of ``_PROJECT_TREE_GITIGNORE_BYTES``), and matching shares
+    ``_PROJECT_TREE_GITIGNORE_CHECKS`` pattern checks -- a folder's entries
+    times the patterns in force there. A folder the check budget cannot cover
+    whole is matched not at all, nor is any folder after it.
     """
     # Directory rows in discovery (breadth-first) order. A folder is a row as
     # soon as its parent's read names it, so a folder the walk then cannot
@@ -391,15 +502,19 @@ def _project_tree_walk_pinned(
     # (row, native path, identity) of every folder of the depth being read; the
     # identity is the ``(st_dev, st_ino)`` the parent's listing saw (``None`` for
     # the root). Only rows inside the cap are ever queued.
-    level: list[tuple[str, str, tuple[int, int] | None]] = [("", base, root_identity)]
+    level: list[tuple[str, str, tuple[int, int] | None, tuple[_IgnoreLayer, ...] | None]] = [
+        ("", base, root_identity, ignores)
+    ]
     budget = scan_limit
+    gitignore_bytes = ignore_bytes
+    gitignore_checks = _PROJECT_TREE_GITIGNORE_CHECKS
     while level:
-        deeper: list[tuple[str, str, tuple[int, int] | None]] = []
+        deeper: list[tuple[str, str, tuple[int, int] | None, tuple[_IgnoreLayer, ...] | None]] = []
         # What each claimant of this depth -- every folder of it, and the depths
         # below as one more -- is guaranteed whatever the folders before it
         # hold: half the even split the depth starts with.
         floor = -(-budget // (2 * (len(level) + 1)))
-        for position, (directory, native, identity) in enumerate(level):
+        for position, (directory, native, identity, inherited) in enumerate(level):
             if budget <= 0:
                 incomplete.update(queued[0] for queued in level[position:])
                 break
@@ -421,6 +536,10 @@ def _project_tree_walk_pinned(
             had_entries = False
             complete = True
             pulled = 0
+            # Every entry pulled, with ``os.walk``'s classification, judged once
+            # the read ends: a ``.gitignore`` governs its own folder's entries,
+            # wherever in the listing it sorts.
+            seen: list[tuple[os.DirEntry[str], bool]] = []
             try:
                 with _project_tree_scandir(native, identity) as entries:
                     listing = iter(entries)
@@ -443,6 +562,30 @@ def _project_tree_walk_pinned(
                         except OSError:
                             is_dir = False
                         had_entries = True
+                        seen.append((entry, is_dir))
+                    layers = inherited
+                    matching: tuple[_IgnoreLayer, ...] = ()
+                    if layers is not None:
+                        if any(entry.name == ".git" for entry, _ in seen):
+                            layers = ()
+                        if any(entry.name == ".gitignore" for entry, _ in seen):
+                            spec, cost = _project_tree_gitignore(native, base, gitignore_bytes)
+                            gitignore_bytes -= cost
+                            if spec is not None:
+                                layers = layers + (_IgnoreLayer(base=native, spec=spec),)
+                        work = len(seen) * sum(len(layer.spec.patterns) for layer in layers)
+                        if work <= gitignore_checks:
+                            gitignore_checks -= work
+                            matching = layers
+                        else:
+                            gitignore_checks = 0
+                    for entry, is_dir in seen:
+                        if matching and _ignored(
+                            os.path.join(native, entry.name),
+                            is_dir=_project_tree_is_real_dir(entry),
+                            layers=matching,
+                        ):
+                            continue
                         if not is_dir:
                             if not fenced(entry.name):
                                 names.append(entry.name)
@@ -471,7 +614,7 @@ def _project_tree_walk_pinned(
                         if _project_tree_is_link(st):
                             linked.append(child)
                         else:
-                            deeper.append((child, child_native, (st.st_dev, st.st_ino)))
+                            deeper.append((child, child_native, (st.st_dev, st.st_ino), layers))
             except (_ProjectTreeFolderMoved, OSError):
                 # Refused, failed part-way, or not the folder its parent
                 # listed (what is there now is not this row's content): nothing
@@ -931,8 +1074,18 @@ def _project_tree_listing(
 
     # Fallback: one bounded breadth-first walk (``_project_tree_walk``).
     if subdir:
+        # A nested repository hides what its own `.gitignore` files hide, as
+        # the project's git listing does for the project.
+        ignores, ignore_bytes = (
+            _project_tree_nested_ignores(base, PurePath(subdir).parts) if in_nested else (None, 0)
+        )
         walked = _project_tree_walk_pinned(
-            native, _PROJECT_TREE_MAX_ENTRIES, _PROJECT_TREE_SCAN_LIMIT, identity
+            native,
+            _PROJECT_TREE_MAX_ENTRIES,
+            _PROJECT_TREE_SCAN_LIMIT,
+            identity,
+            ignores,
+            ignore_bytes,
         )
         if in_nested:
             # A nested repository's `.git` (a pointer file in a submodule) is
