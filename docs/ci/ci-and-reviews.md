@@ -897,7 +897,7 @@ These test preconditions do not promise production ordering under tied clocks.
 Test commands route only `ipv6_required` items to the hosted lane described above.
 This is one migration being validated, not eight already-proven shards
 or a rollout conditional on three green canaries.
-On CodeBuild the only remaining fan-out bound is the CodeBuild account concurrency, which is a per-compute-type quota rather than one account-wide number: in `us-east-1` on account 548848855126 it is 500 concurrent Linux/Medium builds, 300 Linux/Large and 300 Windows Server 2022/Medium. Linux/Medium is the one these routes draw on, since no inline routing constant asks for a larger instance size. `ci-runner-watchdog.yml` already treats saturating it as a known state.
+On CodeBuild the only remaining fan-out bound is the CodeBuild account concurrency, which is a per-compute-type quota rather than one account-wide number: in `us-east-1` on the fleet's account it is 500 concurrent Linux/Medium builds, 300 Linux/Large and 300 Windows Server 2022/Medium. Linux/Medium is the one these routes draw on, since no inline routing constant asks for a larger instance size. `ci-runner-watchdog.yml` already treats saturating it as a known state.
 
 The CI workflow requires this repository, a push, a merge-group event or an
 `opened`/`synchronize` same-repository PR event, and
