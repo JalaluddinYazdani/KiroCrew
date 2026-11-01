@@ -265,7 +265,6 @@
   "src/test/FolderConfigModal.test.tsx",
   "src/test/FolderPanel.deadline.test.tsx",
   "src/test/FolderPanel.search.test.tsx",
-  "src/test/FolderPanel.test.tsx",
   "src/test/FolderPanel.tree.test.tsx",
   "src/test/FollowUpCard.test.tsx",
   "src/test/InstanceTabBar.test.tsx",
