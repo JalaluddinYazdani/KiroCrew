@@ -284,6 +284,7 @@ _EXPECTED_ROUTED_JOBS = {
     ("dependency-vulnerability.yml", "audit-production-dependencies"),
     ("sensitive-change-review.yml", "sensitive-change-review"),
     ("pr-readiness.yml", "readiness"),
+    ("codeql.yml", "analyze"),
 }
 _PUSH_ONLY_WORKFLOWS = {
     "release.yml",
