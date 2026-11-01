@@ -405,7 +405,6 @@
   "src/test/TunnelStatus.test.tsx",
   "src/test/TurnNavigationMinimap.test.tsx",
   "src/test/UpdatePill.test.tsx",
-  "src/test/UserMessage.quote.test.tsx",
   "src/test/UserMessage.test.tsx",
   "src/test/UserMessagePasteCov80.test.tsx",
   "src/test/WebPreviewPanel.frameHint.test.tsx",
